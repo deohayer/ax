@@ -1,0 +1,375 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025 Deo Hayer <deohayer@mail.com>
+
+#
+# API
+#
+
+# Path to the first dir that contains ".ax"
+# Empty if not inside a workspace.
+# Never empty for the user.
+declare AX_ROOT=""
+# Path to the ".ax" subdir.
+# Empty if not inside a workspace.
+# Never empty for the user.
+declare AX_PATH=""
+# Name of the command to execute.
+# Empty if not specified or the corresponding script does not exist.
+# Never empty for the user.
+declare AX_NAME=""
+
+# Evaluate all public AX_* variables, and source the command script, if any.
+# Supposed to be called before the command execution or completion.
+# Errors are not suppressed, the caller is supposed to handle that.
+#
+# $1    Command, if any.
+function ax_init()
+{
+    AX_ROOT="$PWD"
+    while true; do
+        # Found ".ax". AX_ROOT is the workspace root.
+        if [[ -d "$AX_ROOT/.ax" ]]; then
+            AX_PATH="$AX_ROOT/.ax"
+            declare AX_SCRIPT="$AX_PATH/$1.sh"
+            if [[ -f "$AX_SCRIPT" ]] && [[ "${1:0:1}" != "." ]]; then
+                AX_NAME="$1"
+                source "$AX_SCRIPT"
+            fi
+            break
+        fi
+        # Did not find ".ax" up to the root. Not inside a workspace.
+        if [[ "$AX_ROOT" == "/" ]]; then
+            AX_ROOT=""
+            break
+        fi
+        # Did not find ".ax". Recurse into the parent.
+        AX_ROOT="$(dirname "$AX_ROOT")"
+    done
+}
+
+# Find all commands defined 
+function ax_find()
+{
+    find "$AX_PATH" -type f -name "*.sh" -not -name ".*" 2>"/dev/null" | sort || true
+}
+
+#
+# Completion
+#
+
+function _ax()
+{
+    declare -a AX_LIST=()
+    declare AX_WORD="${COMP_WORDS[$COMP_CWORD]}"
+    if (( $COMP_CWORD == 1 )); then
+        # Populate commands or options depending on the first character.
+        if [[ "${AX_WORD:0:1}" != "-" ]]; then
+            ax_init 1>"/dev/null" 2>"/dev/null"
+            declare -a AX_SCRIPTS=($(ax_find 2>"/dev/null"))
+            for AX_SCRIPT in "${AX_SCRIPTS[@]}"; do
+                AX_SCRIPT="$(basename "$AX_SCRIPT")"
+                AX_LIST+=("${AX_SCRIPT%%.sh}")
+            done
+        else
+            AX_LIST+=(
+                "--init"
+                "--setup"
+                "--reset"
+                "--update"
+                )
+        fi
+    else
+        # Apply option filter depending on the first character.
+        declare AX_INVERT="--invert-match"
+        if [[ "${AX_WORD:0:1}" == "-" ]]; then
+            AX_INVERT=""
+        fi
+        # Generate the filtered list.
+        ax_init "${COMP_WORDS[1]}" 1>"/dev/null" 2>"/dev/null"
+        AX_LIST+=($(ax_list "${COMP_WORDS[@]:2}" 2>"/dev/null" | grep $AX_INVERT -E '^-'))
+    fi
+    # Generate completions.
+    COMPREPLY=($(compgen -W "${AX_LIST[*]}" -- "${COMP_WORDS[$COMP_CWORD]}"))
+}
+
+if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
+    complete -o filenames -o bashdefault -o default -F _ax ax
+    return 0
+fi
+
+#
+# API (help)
+#
+
+function ax_print_usage()
+{
+    echo "ax [...]"
+    echo
+}
+
+function ax_print_prolog()
+{
+    echo "Action Executor - define and execute commands in a workspace scope."
+    echo
+}
+
+function ax_print_commands()
+{
+    ax_init 1>"/dev/null" 2>"/dev/null" || true
+    declare -a AX_SCRIPTS=($(ax_find))
+    if (( ${#AX_SCRIPTS} > 0 )); then
+        # Figure out the longest command name.
+        declare -i AX_ALIGN=0
+        declare -i AX_LENGTH=0
+        for AX_SCRIPT in "${AX_SCRIPTS[@]}"; do
+            AX_LENGTH=$((${#AX_SCRIPT} - ${#AX_PATH} - 3))
+            if (( $AX_LENGTH > $AX_ALIGN )); then
+                AX_ALIGN=$AX_LENGTH
+            fi
+        done
+        # Print the commands and their short info.
+        echo "Commands:"
+        for AX_SCRIPT in "${AX_SCRIPTS[@]}"; do
+            # It is necessary to unset ax_info, because if the next command does not override it
+            # the definition from the previous command will be used.
+            unset ax_info
+            # Source the script to obtain ax_info.
+            source "$AX_SCRIPT" 1>"/dev/null" 2>"/dev/null" || true
+            AX_INFO="$(ax_info 2>"/dev/null" || true)"
+            # Print the command name and the info.
+            AX_SCRIPT="$(basename "$AX_SCRIPT")"
+            printf "  %-${AX_ALIGN}s    %s\n" \
+                "${AX_SCRIPT%%.sh}" \
+                "${AX_INFO:-"A custom command."}" \
+                ;
+        done
+        echo
+    fi
+}
+
+function ax_print_options()
+{
+    printf "%s\n"\
+        "Options:" \
+        "  [--init]      Initialize a workspace in the current directory." \
+        "  [--setup]     Setup completion in .bashrc." \
+        "  [--reset]     Reset completion in .bashrc." \
+        "  [--update]    Update to the latest version." \
+        ""
+}
+
+function ax_print_helpers()
+{
+    printf "%s\n"\
+        "Helpers:" \
+        "  -?    Print the help text and exit." \
+        "  -!    Print the hint text and exit." \
+        "  -@    Print the info text and exit." \
+        ""
+}
+
+#
+# Execute: ax
+#
+
+# The hint text, but with an error.
+if [[ "$1" == "" ]]; then
+    ax_print_usage 1>&2
+    ax_print_commands 1>&2
+    ax_print_options 1>&2
+    echo "ax: No commands or options provided." 1>&2
+    exit 22 # EINVAL
+fi
+
+#
+# Execute: ax -!
+#
+
+# The hint text.
+if [[ "$1" == "-!" ]]; then
+    ax_print_usage
+    ax_print_commands
+    ax_print_options
+    exit 0
+fi
+
+#
+# Execute: ax -?
+#
+
+# The help text.
+if [[ "$1" == "-?" ]]; then
+    ax_print_usage
+    ax_print_prolog
+    ax_print_commands
+    ax_print_options
+    ax_print_helpers
+    exit 0
+fi
+
+#
+# Execute: ax -@
+#
+
+# The help text.
+if [[ "$1" == "-@" ]]; then
+    echo "0.0.0"
+    exit 0
+fi
+
+#
+# Execute: ax --init
+#
+
+if [[ "$1" == "--init" ]]; then
+    # Do not do anything if the path already exists.
+    if [[ -e "$PWD/.ax" ]]; then
+        echo "ax: Filesystem entry exists: $PWD/.ax" 1>&2
+        exit 17 # EEXIST
+    fi
+    # Create the directory and contents, stop at any error.
+    set -e
+    mkdir "$PWD/.ax"
+    printf "%s\n" \
+        '# This is a command template. It is safe to keep, ax ignores hidden scripts.' \
+        '# The functions should be implemented, otherwise fallbacks will be used.' \
+        '# The following environment variables are available:' \
+        '#   AX_ROOT    An absolute path to the workspace dir, the one that contains the .ax subdir.' \
+        '#   AX_PATH    An absolute path to the .ax subdir, it contains the sourced script.' \
+        '#   AX_NAME    The command name, a script name without .sh.' \
+        '' \
+        'function ax_info()' \
+        '{' \
+        '    # TODO: Print a single-line command description.' \
+        '    echo "A custom command."' \
+        '}' \
+        '' \
+        'function ax_help()' \
+        '{' \
+        '    # TODO: Print a full help text, note the extra empty line.' \
+        '    printf "%s\n" \' \
+        '        "ax $AX_NAME" \' \
+        '        "" \' \
+        '        "A custom command." \' \
+        '        "" \' \
+        '        "Parameters:" \' \
+        '        "" \' \
+        '        "Options:" \' \
+        '        ""' \
+        '}' \
+        '' \
+        'function ax_list()' \
+        '{' \
+        '    # TODO: Print all completions for the last argument in $@.' \
+        '    return 0' \
+        '}' \
+        '' \
+        'function ax_main()' \
+        '{' \
+        '    # TODO: Execute the command with all arguments in $@.' \
+        '    return 0' \
+        '}' \
+        > "$PWD/.ax/.ax.sh"
+    exit 0
+fi
+
+#
+# Execute: ax --setup
+#
+
+if [[ "$1" == "--setup" ]]; then
+    # .bashrc does not exist.
+    if [[ ! -f "$HOME/.bashrc" ]]; then
+        echo "ax: Refusing to setup completion, the file does not exist: $HOME/.bashrc" 1>&2
+        exit 2 # ENOENT
+    fi
+    # .bashrc already has the line.
+    if grep 'source "$(which ax)" 1>"/dev/null" 2>"/dev/null"' "$HOME/.bashrc" 1>"/dev/null" 2>"/dev/null"; then
+        echo "ax: Refusing to setup completion for the second time." 1>&2
+        exit 17 # EEXIST
+    fi
+    # Modify .bashrc, but do not suppress errors.
+    set -e
+    printf '\nsource "$(which ax)" 1>"/dev/null" 2>"/dev/null" || true\n' >> "$HOME/.bashrc"
+    exit 0
+fi
+
+#
+# Execute: ax --reset
+#
+
+if [[ "$1" == "--reset" ]]; then
+    # Modify .bashrc indiscriminately, it is not a problem if it fails.
+    sed -i '/source "$(which ax)" 1>"\/dev\/null" 2>"\/dev\/null" || true/d' "$HOME/.bashrc" 1>"/dev/null" 2>"/dev/null" || true
+    exit 0
+fi
+
+#
+# Execute: ax --update
+#
+
+# Use a function, since Bash reads scripts in chunks, if not line by line.
+# The in-place script update is likely to cause a text shift. The next line read
+# by Bash after the "curl" will not be "exit 0", which is undefined behavior.
+# Using a function prevents this, since its entire body was already read.
+function ax_update()
+{
+    declare AX="$(which ax)"
+    # Do not update if ax is not in PATH.
+    if [[ -z "$AX" ]]; then
+        echo "ax: Cannot update, ax is not in PATH." 1>&2
+        exit 2 # ENOENT
+    fi
+    # Update in-place, do not ignore errors.
+    set -e
+    echo "Updating: $AX"
+    curl \
+        --fail \
+        --location \
+        --output "$AX" \
+        --connect-timeout 10 \
+        "https://raw.githubusercontent.com/deohayer/ax/main/ax"
+    exit 0
+}
+
+if [[ "$1" == "--update" ]]; then
+    ax_update
+fi
+
+#
+# Execute: ax -*
+#
+
+# Unrecognized option.
+if [[ "${1:0:1}" == "-" ]]; then
+    echo "ax: Unrecognized option: $1" 1>&2
+    exit 22 # EINVAL
+fi
+
+#
+# Execute: ax *
+#
+
+ax_init "$1"
+# Not inside a workspace.
+if [[ -z "$AX_ROOT" ]]; then
+    echo "ax: Not inside a workspace." 1>&2
+    exit 2 # ENOENT
+fi
+# Unrecognized command.
+AX_SCRIPT="$AX_PATH/$AX_NAME.sh"
+if [[ ! -f "$AX_SCRIPT" ]]; then
+    echo "ax: Unrecognized command: $1" 1>&2
+    exit 22 # EINVAL
+fi
+# Execute the command.
+set -e
+source "$AX_SCRIPT"
+# Call help, if necessary.
+if [[ "$2" == "-?" ]]; then
+    ax_help 2>"/dev/null" || true
+    exit 0
+fi
+# Call main.
+ax_main "${@:2}"
