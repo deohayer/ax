@@ -27,6 +27,8 @@ declare AX_NAME=""
 function ax_init()
 {
     AX_ROOT="$PWD"
+    AX_PATH=""
+    AX_NAME=""
     while true; do
         # Found ".ax". AX_ROOT is the workspace root.
         if [[ -d "$AX_ROOT/.ax" ]]; then
@@ -214,7 +216,7 @@ fi
 
 # The help text.
 if [[ "$1" == "-@" ]]; then
-    echo "0.0.1"
+    echo "0.0.2"
     exit 0
 fi
 
