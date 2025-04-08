@@ -51,7 +51,7 @@ function ax_init()
 # Find all commands defined 
 function ax_find()
 {
-    find "$AX_PATH" -type f -name "*.sh" -not -name ".*" 2>"/dev/null" | sort || true
+    find "$AX_PATH" -maxdepth 1 -type "f" -name "*.sh" -not -name ".*" 2>"/dev/null" | sort || true
 }
 
 #
@@ -214,7 +214,7 @@ fi
 
 # The help text.
 if [[ "$1" == "-@" ]]; then
-    echo "0.0.0"
+    echo "0.0.1"
     exit 0
 fi
 
